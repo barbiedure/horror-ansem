@@ -21,7 +21,13 @@ router.get('/global/sanity', async (req, res) => {
 });
 
 // POST /api/global/sanity  { sanity: 0..1 } — fixe la valeur globale (driver placeholder).
+// ÉCRITURE ADMIN uniquement : exige le header `x-admin-token` == process.env.ADMIN_TOKEN.
+// Sans token configuré, l'écriture est refusée (empêche le défaçage public de l'état partagé).
 router.post('/global/sanity', async (req, res) => {
+  const token = process.env.ADMIN_TOKEN;
+  if (!token || req.get('x-admin-token') !== token) {
+    return res.status(403).json({ error: 'interdit' });
+  }
   const { sanity } = req.body ?? {};
   const v = Number(sanity);
   if (!Number.isFinite(v)) return res.status(400).json({ error: 'sanity invalide' });

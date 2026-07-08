@@ -23,6 +23,7 @@ export class EndScreen {
     this.onMenu = onMenu;
     this.playerId = getPlayerId();
     this.percent = percentOf(levelReached);
+    this.submitted = false; // garde d'idempotence : un run = UNE seule ligne enregistrée
 
     this.root = document.createElement('div');
     this.root.className = `endscreen ${won ? 'win' : 'lose'}`;
@@ -31,11 +32,16 @@ export class EndScreen {
     // à l'abri de tout ancêtre transformé/filtré : la fenêtre reste centrée, sans scroll.
     document.body.appendChild(this.root);
 
+    // À la sortie de l'écran (rejouer / menu), on enregistre le run une dernière fois si le joueur
+    // n'a pas cliqué « Save my name » — ainsi mort ET victoire sont enregistrées, mais UNE seule
+    // fois (garde `submitted`), sans doublon ni écrasement du pseudo par l'auto-soumission.
     this.root.querySelector('[data-replay]').addEventListener('click', () => {
+      this.#submitScore();
       this.destroy();
       onReplay();
     });
     this.root.querySelector('[data-menu]').addEventListener('click', () => {
+      this.#submitScore();
       this.destroy();
       onMenu();
     });
@@ -46,8 +52,6 @@ export class EndScreen {
       this.#submitScore();
     });
 
-    // Enregistrement automatique du run (mort comprise), avec le pseudo mémorisé s'il existe.
-    this.#submitScore();
     this.#loadLeaderboard();
   }
 
@@ -81,6 +85,8 @@ export class EndScreen {
   }
 
   async #submitScore() {
+    if (this.submitted) return; // un seul enregistrement par run (pas de doublon)
+    this.submitted = true;
     const input = this.root.querySelector('input[name="name"]');
     const msg = this.root.querySelector('[data-submit-msg]');
     const typed = input.value.trim();
@@ -109,6 +115,7 @@ export class EndScreen {
       }
       this.#loadLeaderboard();
     } catch {
+      this.submitted = false; // échec réseau → on autorise une nouvelle tentative
       msg.textContent = '⚠️ Could not save (server offline?)';
     }
   }

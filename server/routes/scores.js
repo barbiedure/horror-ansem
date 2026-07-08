@@ -17,9 +17,12 @@ router.post('/scores', async (req, res) => {
   const levelNum = Number(level_reached);
   const level = Number.isFinite(levelNum) ? Math.min(Math.max(Math.round(levelNum), 1), 99) : 1;
   const pid = player_id != null ? String(player_id).trim().slice(0, 64) || null : null;
-  const didWin = won === undefined ? true : Boolean(won);
+  // Plausibilité (garde-fou anti-triche léger — PAS une validation autoritative côté serveur) :
+  //  - aucun run réel ne dure moins de ~1,5 s (animations de réveil + déplacement) → rejet ;
+  //  - « won » n'est cohérent qu'en ayant atteint le dernier chapitre (level_reached ≥ 5).
+  const didWin = (won === undefined ? true : Boolean(won)) && level >= 5;
 
-  if (!Number.isFinite(ms) || ms <= 0 || ms > 1000 * 60 * 60) {
+  if (!Number.isFinite(ms) || ms < 1500 || ms > 1000 * 60 * 60) {
     return res.status(400).json({ error: 'time_ms invalide' });
   }
   if (!Number.isFinite(size) || size < 5 || size > 101) {

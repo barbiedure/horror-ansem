@@ -224,6 +224,7 @@ export class Landing {
   }
 
   async #pollSanity() {
+    if (document.hidden) return; // onglet en arrière-plan → on ne sollicite pas le serveur
     const valEl = this.root.querySelector('[data-sanity-val]');
     try {
       const res = await fetch('/api/global/sanity');

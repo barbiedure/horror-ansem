@@ -8,7 +8,7 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-const DEFAULT_URL = 'postgres://postgres:postgres@localhost:5432/escape_bonk';
+const DEFAULT_URL = 'postgres://postgres:postgres@localhost:5434/escape_bonk';
 const connectionString = process.env.DATABASE_URL || DEFAULT_URL;
 
 // SSL activé si demandé (services managés type Neon/Render/Heroku).
@@ -17,7 +17,8 @@ const ssl =
     ? { rejectUnauthorized: false }
     : undefined;
 
-const pool = new Pool({ connectionString, ssl });
+// Pool élargi (défaut pg = 10) pour tenir davantage de requêtes concurrentes ; réglable via env.
+const pool = new Pool({ connectionString, ssl, max: Number(process.env.PG_POOL_MAX) || 20 });
 
 pool.on('error', (err) => {
   console.error('[db] erreur inattendue du pool PostgreSQL :', err.message);
@@ -46,8 +47,10 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_scores_time ON scores(time_ms ASC);
     CREATE INDEX IF NOT EXISTS idx_scores_furthest ON scores(level_reached DESC, time_ms ASC);
     CREATE INDEX IF NOT EXISTS idx_scores_player ON scores(player_id);
-
-    -- Santé mentale GLOBALE partagée par tous les joueurs (une seule ligne).
+    -- Index fonctionnel pour le classement par avancement (DISTINCT ON sur la clé joueur + tri) :
+    -- évite le full-scan/full-sort sur les chemins les plus chauds (progressBoard, playerRank).
+    CREATE INDEX IF NOT EXISTS idx_scores_progress
+      ON scores ((COALESCE(player_id, 'name:' || name)), level_reached DESC, won DESC, time_ms ASC);
     CREATE TABLE IF NOT EXISTS global_state (
       id         INTEGER     PRIMARY KEY DEFAULT 1,
       sanity     REAL        NOT NULL DEFAULT 1,
@@ -62,13 +65,11 @@ export async function initDb() {
       sanity REAL        NOT NULL,
       at     TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    CREATE INDEX IF NOT EXISTS idx_sanity_history_at ON sanity_history(at DESC);
   `);
 }
-
-// Lancement en tâche de fond : n'interrompt jamais le démarrage du serveur.
-initDb()
-  .then(() => console.log('[db] schéma prêt'))
-  .catch((err) => console.error('[db] init différée — base injoignable :', err.message));
+// initDb() est désormais AWAITÉ au démarrage par index.js (avant app.listen) → le schéma existe
+// avant de servir la moindre requête. Reste ré-appelable et non bloquant si la base est down.
 
 /** @param {ScoreInput} s */
 export async function addScore(s) {
@@ -157,6 +158,11 @@ export async function setGlobalSanity(v) {
     [sanity]
   );
   await pool.query('INSERT INTO sanity_history (sanity) VALUES ($1)', [sanity]);
+  // Élagage : on ne conserve que les ~500 points les plus récents (croissance bornée).
+  await pool.query(
+    `DELETE FROM sanity_history
+     WHERE id NOT IN (SELECT id FROM sanity_history ORDER BY at DESC LIMIT 500)`
+  );
   return sanity;
 }
 

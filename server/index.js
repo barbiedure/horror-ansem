@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import scoresRouter from './routes/scores.js';
 import cryptoRouter from './routes/crypto.js';
 import globalRouter from './routes/global.js';
-import { backend } from './db.js';
+import { backend, initDb } from './db.js';
+import { rateLimit } from './rateLimit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -30,6 +31,11 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, db: backend, uptime: process.uptime() });
 });
 
+// Limite de débit sur les ÉCRITURES (POST) : bride les floods qui pollueraient le leaderboard /
+// la santé globale et sature­raient le pool PG. Les GET (lecture) ne sont pas bridés ici.
+const writeLimiter = rateLimit({ windowMs: 60_000, max: 40 });
+app.use('/api', (req, res, next) => (req.method === 'POST' ? writeLimiter(req, res, next) : next()));
+
 app.use('/api', scoresRouter);
 app.use('/api', cryptoRouter);
 app.use('/api', globalRouter);
@@ -42,6 +48,12 @@ if (fs.existsSync(clientDist)) {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
+
+// Crée le schéma AVANT d'écouter (le schéma existe donc avant la 1ʳᵉ requête). Best-effort :
+// si la base est injoignable, on log et on sert quand même (mode dégradé → 500 sur les routes DB).
+await initDb()
+  .then(() => console.log('[db] schéma prêt'))
+  .catch((err) => console.error('[db] init différée — base injoignable :', err.message));
 
 app.listen(PORT, () => {
   console.log(`🐕  Escape BONK — serveur sur http://localhost:${PORT}`);
