@@ -4,6 +4,9 @@
   "private": true,
   "description": "Jeu d'horreur 3D FPS : fuis le monstre BONK dans un labyrinthe.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "client",
     "server"

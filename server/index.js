@@ -17,6 +17,9 @@ const PORT = process.env.PORT || 3000;
 const isDev = process.env.NODE_ENV !== 'production';
 
 const app = express();
+// Derrière le proxy d'hébergement (Railway, etc.) : req.ip = vraie IP client (X-Forwarded-For),
+// sinon le rate-limiter par IP verrait tout le monde comme une seule IP (celle du proxy).
+app.set('trust proxy', 1);
 app.use(express.json());
 
 // CORS permissif en dev (le client Vite tourne sur :5173).
