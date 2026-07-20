@@ -39,7 +39,9 @@ app.get('/api/health', (_req, res) => {
 
 // Rate limit on WRITES (POST): throttles floods that would pollute the leaderboard /
 // global sanity and saturate the PG pool. GETs (reads) are not throttled here.
-const writeLimiter = rateLimit({ windowMs: 60_000, max: 40 });
+// 150/min: several players often share one IP (same WiFi, mobile CGNAT) and a ranked
+// run costs ~4 POSTs (nonce, verify, run/start, scores) — 40 starved whole groups.
+const writeLimiter = rateLimit({ windowMs: 60_000, max: 150 });
 app.use('/api', (req, res, next) => (req.method === 'POST' ? writeLimiter(req, res, next) : next()));
 
 app.use('/api', authRouter);
@@ -51,8 +53,25 @@ app.use('/api', globalRouter);
 // In production, serves the client's static build.
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDist)) {
-  app.use(express.static(clientDist));
+  // dist/assets/* is content-hashed by Vite → cache forever. Files copied from
+  // public/ (audio, textures — ~22 MB) keep their original names → cache 1 day with
+  // ETag revalidation (a reload costs a 304, not a re-download). index.html stays
+  // no-cache so a new deploy is picked up immediately.
+  const assetsDir = path.join(clientDist, 'assets') + path.sep;
+  app.use(
+    express.static(clientDist, {
+      maxAge: '1d',
+      setHeaders: (res, filePath) => {
+        if (filePath.startsWith(assetsDir)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    })
+  );
   app.get('*', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
@@ -67,9 +86,19 @@ await initDb()
 // Best-effort: if RPC/mint are missing or unreachable, the server still runs (see marketcap.js).
 startMarketCapPoller();
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🐕  Escape ANSEM - server on http://localhost:${PORT}`);
   if (isDev && !fs.existsSync(clientDist)) {
     console.log('    (dev) start the client with: npm run dev:client  → http://localhost:5173');
   }
 });
+
+// Graceful shutdown: on redeploy/restart Railway sends SIGTERM. Finish in-flight
+// requests instead of dropping them, then exit; hard-exit after 10s regardless.
+function shutdown(signal) {
+  console.log(`[server] ${signal} received, draining connections…`);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 10_000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
